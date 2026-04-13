@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SNAP Graph Builder — InSAR Preprocessing Pipeline
+Run with:
+    gpt insar_preprocessing.xml \
+        -Pmaster=./data/raw_slc/pre_event/*.zip \
+        -Pslave=./data/raw_slc/post_01/*.zip \
+        -Poutput=./data/processed/pre_post01
+
+Repeat for each pre/post pair, changing -Pslave and -Poutput.
+
+Steps:
+    1. TOPSAR Split      — extract subswath IW2 (covers Kahramanmaraş)
+    2. Apply Orbit File  — precise orbital state vectors (improves coregistration)
+    3. Back Geocoding    — coregisters slave to master geometry
+    4. Interferogram     — generates interferometric phase
+    5. TOPSAR Deburst    — merge bursts into continuous image
+    6. Goldstein Filter  — reduces phase noise
+    7. Multilook         — reduces speckle, improves coherence estimation
+    8. Terrain Correction— geocodes to geographic coordinates (WGS84)
+    9. Band Subset       — extract only: coherence, amplitude, phase bands
+-->
+
+<graph id="InSAR_Preprocessing">
+
+  <!-- ── 1. Split master (pre-event) ─────────────────────────── -->
+  <node id="Split_Master">
+    <operator>TOPSAR-Split</operator>
+    <sources>
+      <sourceProduct>${master}</sourceProduct>
+    </sources>
+    <parameters>
+      <subswath>IW2</subswath>
+      <selectedPolarisations>VV</selectedPolarisations>
+      <burstIndex>2,3,4</burstIndex>  <!-- bursts covering AOI -->
+    </parameters>
+  </node>
+
+  <!-- ── 2. Apply orbit file to master ──────────────────────── -->
+  <node id="ApplyOrbit_Master">
+    <operator>Apply-Orbit-File</operator>
+    <sources>
+      <sourceProduct refid="Split_Master"/>
+    </sources>
+    <parameters>
+      <orbitType>Sentinel Precise (Auto Download)</orbitType>
+      <polyDegree>3</polyDegree>
+    </parameters>
+  </node>
+
+  <!-- ── 3. Split slave (post-event) ────────────────────────── -->
+  <node id="Split_Slave">
+    <operator>TOPSAR-Split</operator>
+    <sources>
+      <sourceProduct>${slave}</sourceProduct>
+    </sources>
+    <parameters>
+      <subswath>IW2</subswath>
+      <selectedPolarisations>VV</selectedPolarisations>
+      <burstIndex>2,3,4</burstIndex>
+    </parameters>
+  </node>
+
+  <!-- ── 4. Apply orbit file to slave ──────────────────────── -->
+  <node id="ApplyOrbit_Slave">
+    <operator>Apply-Orbit-File</operator>
+    <sources>
+      <sourceProduct refid="Split_Slave"/>
+    </sources>
+    <parameters>
+      <orbitType>Sentinel Precise (Auto Download)</orbitType>
+      <polyDegree>3</polyDegree>
+    </parameters>
+  </node>
+
+  <!-- ── 5. Back-geocoding (coregistration) ─────────────────── -->
+  <node id="BackGeocoding">
+    <operator>Back-Geocoding</operator>
+    <sources>
+      <sourceProduct refid="ApplyOrbit_Master"/>
+      <sourceProduct refid="ApplyOrbit_Slave"/>
+    </sources>
+    <parameters>
+      <demName>Copernicus 30m Global DEM</demName>
+      <demResamplingMethod>BICUBIC_INTERPOLATION</demResamplingMethod>
+      <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
+      <outputRangeAzimuthOffset>false</outputRangeAzimuthOffset>
+      <outputDerampDemodPhase>true</outputDerampDemodPhase>
+    </parameters>
+  </node>
+
+  <!-- ── 6. Interferogram formation ─────────────────────────── -->
+  <node id="Interferogram">
+    <operator>Interferogram</operator>
+    <sources>
+      <sourceProduct refid="BackGeocoding"/>
+    </sources>
+    <parameters>
+      <subtractFlatEarthPhase>true</subtractFlatEarthPhase>
+      <srpPolynomialDegree>5</srpPolynomialDegree>
+      <srpNumberPoints>501</srpNumberPoints>
+      <orbitDegree>3</orbitDegree>
+      <includeCoherence>true</includeCoherence>        <!-- KEY: output coherence band -->
+      <cohWinAz>10</cohWinAz>                          <!-- coherence window azimuth -->
+      <cohWinRg>10</cohWinRg>                          <!-- coherence window range -->
+      <squarePixel>true</squarePixel>
+    </parameters>
+  </node>
+
+  <!-- ── 7. Deburst ─────────────────────────────────────────── -->
+  <node id="Deburst">
+    <operator>TOPSAR-Deburst</operator>
+    <sources>
+      <sourceProduct refid="Interferogram"/>
+    </sources>
+    <parameters>
+      <selectedPolarisations>VV</selectedPolarisations>
+    </parameters>
+  </node>
+
+  <!-- ── 8. Goldstein phase filtering ───────────────────────── -->
+  <node id="GoldsteinFilter">
+    <operator>GoldsteinPhaseFiltering</operator>
+    <sources>
+      <sourceProduct refid="Deburst"/>
+    </sources>
+    <parameters>
+      <alpha>0.5</alpha>        <!-- filter strength: 0=none, 1=max -->
+      <FFTSizeString>64</FFTSizeString>
+      <windowSizeString>3</windowSizeString>
+    </parameters>
+  </node>
+
+  <!-- ── 9. Multilook ───────────────────────────────────────── -->
+  <node id="Multilook">
+    <operator>Multilook</operator>
+    <sources>
+      <sourceProduct refid="GoldsteinFilter"/>
+    </sources>
+    <parameters>
+      <nRgLooks>4</nRgLooks>    <!-- range looks -->
+      <nAzLooks>1</nAzLooks>    <!-- azimuth looks -->
+      <outputIntensity>false</outputIntensity>
+    </parameters>
+  </node>
+
+  <!-- ── 10. Range-Doppler Terrain Correction ───────────────── -->
+  <node id="TerrainCorrection">
+    <operator>Terrain-Correction</operator>
+    <sources>
+      <sourceProduct refid="Multilook"/>
+    </sources>
+    <parameters>
+      <demName>Copernicus 30m Global DEM</demName>
+      <demResamplingMethod>BICUBIC_INTERPOLATION</demResamplingMethod>
+      <imgResamplingMethod>BICUBIC_INTERPOLATION</imgResamplingMethod>
+      <pixelSpacingInMeter>20.0</pixelSpacingInMeter>  <!-- output resolution -->
+      <mapProjection>WGS84(DD)</mapProjection>
+      <saveDEM>false</saveDEM>
+      <saveLatLon>false</saveLatLon>
+      <saveLocalIncidenceAngle>false</saveLocalIncidenceAngle>
+      <applyRadiometricNormalization>false</applyRadiometricNormalization>
+    </parameters>
+  </node>
+
+  <!-- ── 11. Write output ───────────────────────────────────── -->
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="TerrainCorrection"/>
+    </sources>
+    <parameters>
+      <file>${output}</file>
+      <formatName>GeoTIFF-BigTIFF</formatName>   <!-- rasterio-friendly -->
+    </parameters>
+  </node>
+
+</graph>
