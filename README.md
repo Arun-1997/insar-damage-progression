@@ -5,3 +5,5 @@ Novelty of this approach
 - Trajectory labels: generated via DTW clustering on coherence time series within Copernicus EMS damage zones — no clean ground truth exists for this formulation.
 - Architecture progression: Conv-LSTM U-Net baseline, followed by ablations with Video Swin Transformer and SegMamba.
 
+Author's Log - 13/Apr/2026:
+ - Basically, I wanted to try something new with InSAR, and started implementing this using genAI. I want to try taking this practically as far as possible with AI. 
